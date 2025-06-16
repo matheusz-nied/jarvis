@@ -6,7 +6,14 @@ from langchain.agents import Tool, initialize_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain.chat_models import init_chat_model
 from langchain.agents.agent_types import AgentType
+try:
+    # load environment variables from .env file (requires `python-dotenv`)
+    from dotenv import load_dotenv
+    print("Loading environment variables from .env file...")
 
+    load_dotenv()
+except ImportError:
+    pass
 # 🔐 Chave da API Google Gemini
 if not os.environ.get("GOOGLE_API_KEY"):
     os.environ["GOOGLE_API_KEY"] = getpass.getpass("Enter API key for Google Gemini: ")
@@ -266,11 +273,134 @@ def tocar_musica(query: str):
     
     return f"Não foi possível abrir um navegador para reproduzir '{query}'. Verifique se o Google Chrome está instalado."
 
-# 💧 Exemplo de uso
-comando = "Quero ouvir imagine dragons natural no YouTube"
+# 🎙️ Módulo de reconhecimento de voz
+import speech_recognition as sr
+import re
 
-tocar_musica(comando)
-while True:
-    comando = input("Eu: ")
-    resposta = agent.run(comando)
+def escutar_comando():
+    """Escuta o microfone e retorna o texto reconhecido"""
+    recognizer = sr.Recognizer()
+    
+    # Ajusta o recognizer para o ruído ambiente
+    with sr.Microphone() as source:
+        print("\n🔊 Ajustando para ruído ambiente...")
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        print("🎧 Ouvindo...")
+        
+        try:
+            # Removido timeout para escutar indefinidamente
+            audio = recognizer.listen(source, phrase_time_limit=5)
+            print("🔍 Reconhecendo...")
+            
+            # Usando o Google Speech Recognition
+            texto = recognizer.recognize_google(audio, language="pt-BR")
+            print(f"🗣️ Você disse: {texto}")
+            return texto.lower()
+        except sr.WaitTimeoutError:
+            return ""
+        except sr.UnknownValueError:
+            print("❓ Não entendi o que você disse")
+            return ""
+        except sr.RequestError as e:
+            print(f"❌ Erro na requisição ao serviço de reconhecimento: {e}")
+            return ""
+
+def detectar_jarvis(texto):
+    """Verifica se o texto contém a palavra de ativação 'Jarvis'"""
+    return bool(re.search(r"\bjarvis\b", texto, re.IGNORECASE))
+
+def extrair_comando_musica(texto):
+    """Extrai o comando de música do texto"""
+    # Padrões comuns para pedidos de música
+    padrao_tocar = r"(tocar|ouvir|escutar|coloca|coloque|põe|bota)\s+(a música|música|a canção|canção|o som|som)?\s*(.+)"
+    
+    # Procura padrões de pedido de música no texto
+    match = re.search(padrao_tocar, texto, re.IGNORECASE)
+    if match:
+        return match.group(3)
+    
+    # Se não encontrou padrões específicos, remove apenas o "jarvis" do texto
+    return re.sub(r"\bjarvis\b", "", texto, flags=re.IGNORECASE).strip()
+
+def processar_comando_voz():
+    """Processa o comando de voz e retorna o texto processado"""
+    texto = escutar_comando()
+    
+    if not texto:
+        return ""
+        
+    if detectar_jarvis(texto):
+        print("🤖 Jarvis ativado!")
+        comando_musica = extrair_comando_musica(texto)
+        
+        if comando_musica:
+            print(f"🎵 Comando de música: '{comando_musica}'")
+            return comando_musica
+    
+    return ""
+
+# Configuração do agente
+tools = [
+    Tool(
+        name="Pesquisa na Web",
+        func=pesquisar_web,
+        description="Ferramenta para pesquisar na web por informações"
+    ),
+    Tool(
+        name="Reproduzir Música",
+        func=tocar_musica,
+        description="Ferramenta para tocar música no YouTube"
+    )
+]
+
+# Inicialização do agente
+agent = initialize_agent(
+    tools, 
+    llm, 
+    agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+    verbose=True,
+    handle_parsing_errors=True,
+    system_message=SystemMessage(content="""Você é o Jarvis, um assistente de IA avançado.
+    Seu objetivo é ajudar o usuário com suas tarefas diárias, responder perguntas e entretenimento.
+    Você tem acesso a ferramentas para pesquisar na web e reproduzir músicas no YouTube.""")
+)
+
+# 🚀 Execução principal
+def modo_voz():
+    print("\n🎤 Modo de reconhecimento de voz ativado! Diga 'Jarvis' seguido do seu pedido de música.")
+    print("🛑 Pressione Ctrl+C para sair")
+    
+    try:
+        while True:
+            comando = processar_comando_voz()
+            if comando:
+                print(f"🎵 Reproduzindo: {comando}")
+                tocar_musica(comando)
+    except KeyboardInterrupt:
+        print("\n👋 Encerrando o modo de voz...")
+
+def modo_texto():
+    print("\n⌨️ Modo de texto ativado! Digite seus comandos:")
+    print("🛑 Pressione Ctrl+C para sair")
+    
+    try:
+        while True:
+            comando = input("\nEu: ")
+            resposta = agent.run(comando)
+            print(f"\n📢 Resposta do assistente: {resposta}")
+    except KeyboardInterrupt:
+        print("\n👋 Encerrando o modo de texto...")
+
+# Interface de linha de comando simples
+if __name__ == "__main__":
+    print("\n🤖 JARVIS - Assistente Pessoal")
+    print("1 - Modo de voz (diga 'Jarvis' seguido do pedido de música)")
+    print("2 - Modo de texto (digite comandos)")
+    
+    escolha = input("Escolha uma opção (1/2): ")
+    
+    if escolha == "1":
+        modo_voz()
+    else:
+        modo_texto()
     print(f"\n📢 Resposta do assistente: {resposta}")

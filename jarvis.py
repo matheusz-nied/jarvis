@@ -6,6 +6,8 @@ from langchain.agents import Tool, initialize_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain.chat_models import init_chat_model
 from langchain.agents.agent_types import AgentType
+
+from test_interface import JarvisInterface
 try:
     # load environment variables from .env file (requires `python-dotenv`)
     from dotenv import load_dotenv
@@ -70,6 +72,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from shutil import which
+import signal  # Para enviar sinais de terminação a processos
 
 # Tenta importar pyautogui para automação de cliques
 try:
@@ -81,11 +84,20 @@ except ImportError:
     print("Instale com: pip install pyautogui")
 
 
+# Variável global para armazenar o processo do navegador atual
+chrome_process = None
+
 def tocar_musica(query: str):
     # Formata a URL para busca de vídeos no YouTube
     url_search = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}&sp=EgIQAQ%253D%253D"
     
     print(f"[MÚSICA] Tentando tocar: {query}")
+    
+    # Verifica se já existe um processo Chrome aberto e o fecha
+    global chrome_process
+    if chrome_process:
+        print("[INFO] Já existe um navegador aberto. Fechando antes de abrir nova música...")
+        parar_musica()
     
     driver = None 
     # try:
@@ -215,6 +227,8 @@ def tocar_musica(query: str):
         # Abre o Google Chrome diretamente com a URL de busca
         print(f"[INFO] Tentando abrir {url_search} com {chrome_subprocess_path} via subprocess...")
         process = subprocess.Popen([chrome_subprocess_path, url_search])
+        # Armazena o processo atual para poder encerrá-lo depois
+        chrome_process = process
         print(f"[✅] Sucesso! URL aberta com {chrome_subprocess_path}")
         
         # Pausamos o script por alguns segundos para a página carregar completamente
@@ -279,6 +293,11 @@ import re
 
 def escutar_comando():
     """Escuta o microfone e retorna o texto reconhecido"""
+    # Se tivermos interface gráfica, atualiza o estado
+    global interface
+    if interface:
+        interface.start_listening()
+    
     recognizer = sr.Recognizer()
     
     # Ajusta o recognizer para o ruído ambiente
@@ -288,26 +307,116 @@ def escutar_comando():
         print("🎧 Ouvindo...")
         
         try:
-            # Removido timeout para escutar indefinidamente
-            audio = recognizer.listen(source, phrase_time_limit=5)
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
             print("🔍 Reconhecendo...")
+            
+            # Atualiza estado da interface
+            if interface:
+                interface.stop_listening()
+                interface.start_thinking()
             
             # Usando o Google Speech Recognition
             texto = recognizer.recognize_google(audio, language="pt-BR")
             print(f"🗣️ Você disse: {texto}")
             return texto.lower()
         except sr.WaitTimeoutError:
+            if interface:
+                interface.stop_listening()
             return ""
         except sr.UnknownValueError:
+            if interface:
+                interface.stop_listening()
             print("❓ Não entendi o que você disse")
             return ""
         except sr.RequestError as e:
+            if interface:
+                interface.stop_listening()
             print(f"❌ Erro na requisição ao serviço de reconhecimento: {e}")
             return ""
 
 def detectar_jarvis(texto):
     """Verifica se o texto contém a palavra de ativação 'Jarvis'"""
     return bool(re.search(r"\bjarvis\b", texto, re.IGNORECASE))
+
+def detectar_comando_parar(texto):
+    """Verifica se o texto contém comando para parar a música"""
+    # Lista de padrões que indicam comando para parar
+    padroes_parar = [
+        r"\bparar\b",  
+        r"\bpara\b", 
+        r"\bpare\b", 
+        r"\bstop\b", 
+        r"\bcancela\b",
+        r"\bfecha\b", 
+        r"\bencerra\b",
+        r"\bdesliga\b", 
+        r"\bsilencia\b"
+    ]
+    
+    # Lista de palavras de contexto relacionadas a música/audio
+    contexto_musica = [
+        r"\bmúsica\b", 
+        r"\bsom\b", 
+        r"\báudio\b", 
+        r"\btítulo\b", 
+        r"\bcanção\b", 
+        r"\byoutube\b", 
+        r"\bnavegador\b"
+    ]
+    
+    # Verifica se há algum padrão de parada
+    for padrao in padroes_parar:
+        if re.search(padrao, texto, re.IGNORECASE):
+            # Se encontrou um padrão de parada, verifica se há contexto de música
+            for contexto in contexto_musica:
+                if re.search(contexto, texto, re.IGNORECASE):
+                    return True
+            
+            # Mesmo sem o contexto explícito, assume que é para parar
+            return True
+    
+    return False
+
+def detectar_comando_pausar(texto):
+    """Verifica se o texto contém comando para pausar a música"""
+    # Lista de padrões que indicam comando para pausar
+    padroes_pausar = [
+        r"\bpausar\b",
+        r"\bpausa\b",
+        r"\bpause\b",
+        r"\besperar\b",
+        r"\bespera\b",
+        r"\bcongelar\b"
+    ]
+    
+    # Verifica se há algum padrão de pausa
+    for padrao in padroes_pausar:
+        if re.search(padrao, texto, re.IGNORECASE):
+            return True
+    
+    return False
+
+def detectar_comando_tocar(texto):
+    """Verifica se o texto contém comando para resumir/tocar a música"""
+    # Lista de padrões que indicam comando para resumir/tocar
+    padroes_tocar = [
+        r"\btocar\b",
+        r"\btoca\b",
+        r"\bcontinuar\b",
+        r"\bcontinua\b",
+        r"\bresume\b",
+        r"\bresumír\b",
+        r"\bresume\b",
+        r"\bplay\b",
+        r"\bseguir\b"
+    ]
+    
+    # Verifica se há algum padrão de tocar/resumir
+    for padrao in padroes_tocar:
+        if re.search(padrao, texto, re.IGNORECASE):
+            return True
+    
+    return False
 
 def extrair_comando_musica(texto):
     """Extrai o comando de música do texto"""
@@ -322,22 +431,181 @@ def extrair_comando_musica(texto):
     # Se não encontrou padrões específicos, remove apenas o "jarvis" do texto
     return re.sub(r"\bjarvis\b", "", texto, flags=re.IGNORECASE).strip()
 
+def parar_musica():
+    """Para a reprodução de música fechando o processo do navegador"""
+    global chrome_process
+    
+    if chrome_process:
+        print("[INFO] Tentando encerrar o navegador usando subprocess.terminate()")
+        try:
+            if chrome_process.poll() is None:
+                chrome_process.terminate()
+                try:
+                    chrome_process.wait(timeout=2)
+                    print("[INFO] Navegador encerrado com sucesso")
+                    chrome_process = None
+                    return True
+                except subprocess.TimeoutExpired:
+                    print("[INFO] Tempo expirado ao tentar encerrar o navegador, usando kill()")
+                    chrome_process.kill()
+                    chrome_process = None
+                    return True
+            else:
+                print("[INFO] O navegador já está fechado")
+                chrome_process = None
+                return False
+        except Exception as e:
+            print(f"[ERRO] Erro ao tentar encerrar o navegador: {e}")
+            chrome_process = None
+            return False
+    else:
+        print("[INFO] Não há navegador aberto para ser fechado")
+        return False
+
+def pausar_musica():
+    """Pausa a reprodução de música clicando na posição do player"""
+    global chrome_process
+    
+    if chrome_process and chrome_process.poll() is None:
+        try:
+            # Clica na posição do player para pausar
+            print("[INFO] Tentando pausar a música com um clique...")
+            pyautogui.click(x=400, y=600)
+            print("[✅] Tentativa de pausar a música executada")
+            return True
+        except Exception as e:
+            print(f"[ERRO] Erro ao tentar pausar a música: {e}")
+            return False
+    else:
+        print("[INFO] Não há navegador aberto para pausar a música")
+        return False
+
+def retomar_musica():
+    """Retoma a reprodução de música clicando na posição do player"""
+    global chrome_process
+    
+    if chrome_process and chrome_process.poll() is None:
+        try:
+            # Clica na posição do player para retomar
+            print("[INFO] Tentando retomar a música com um clique...")
+            pyautogui.click(x=400, y=600)
+            print("[✅] Tentativa de retomar a música executada")
+            return True
+        except Exception as e:
+            print(f"[ERRO] Erro ao tentar retomar a música: {e}")
+            return False
+    else:
+        print("[INFO] Não há navegador aberto para retomar a música")
+        return False
+
 def processar_comando_voz():
-    """Processa o comando de voz e retorna o texto processado"""
+    """Processa o comando de voz e retorna o texto processado ou comandos especiais"""
     texto = escutar_comando()
     
+    # Se não reconheceu nenhum texto, retorna vazio
     if not texto:
         return ""
-        
-    if detectar_jarvis(texto):
-        print("🤖 Jarvis ativado!")
-        comando_musica = extrair_comando_musica(texto)
-        
-        if comando_musica:
-            print(f"🎵 Comando de música: '{comando_musica}'")
-            return comando_musica
     
-    return ""
+    # Verifica se o texto contém a palavra-chave "jarvis"
+    if not detectar_jarvis(texto):
+        print("❌ Comando não começou com 'Jarvis'")
+        return ""
+    
+    # Verifica comandos de controle de música
+    if detectar_comando_parar(texto):
+        parar_musica()
+        # Mostra uma expressão feliz brevemente depois de executar o comando
+        global interface
+        if interface:
+            interface.be_happy(1500)
+        return "[COMANDO_EXECUTADO]"  # Sinaliza que o comando foi executado
+    
+    if detectar_comando_pausar(texto):
+        pausar_musica()
+        # Mostra uma expressão feliz brevemente depois de executar o comando
+        if interface:
+            interface.be_happy(1500)
+        return "[COMANDO_EXECUTADO]"  # Sinaliza que o comando foi executado
+    
+    if detectar_comando_tocar(texto):
+        # Verifica se é comando para retomar música atual ou tocar nova música
+        comando_musica = extrair_comando_musica(texto)
+        if comando_musica:
+            # Comando para tocar nova música
+            tocar_musica(comando_musica)
+        else:
+            # Comando para retomar música atual
+            retomar_musica()
+        
+        # Mostra uma expressão feliz brevemente depois de executar o comando
+        if interface:
+            interface.be_happy(1500)
+            
+        return "[COMANDO_EXECUTADO]"  # Sinaliza que o comando foi executado
+    
+    # Remove a palavra "jarvis" do comando para processamento
+    texto = texto.replace("jarvis", "").strip()
+    
+    return texto  # Retorna o comando para ser processado pelo agente
+
+def modo_voz():
+    """Inicia o assistente no modo de comandos por voz."""
+    global interface
+    print("\n🎙️ Modo de Voz iniciado - diga 'Jarvis' seguido do seu comando.")
+    print("Digite 'sair' para encerrar.")
+    
+    import pygame
+    while True:
+        try:
+            # Mantém a interface responsiva
+            if interface:
+                pygame.event.pump()
+            # Processa o comando de voz
+            comando = processar_comando_voz()
+            
+            # Se não foi reconhecido um comando válido, continua
+            if not comando:
+                continue
+            
+            # Se foi um comando específico que já foi tratado
+            if comando == "[COMANDO_EXECUTADO]":
+                continue
+            
+            # Chama o agente com o comando
+            print(f"\n🤖 Processando: '{comando}'")
+            
+            # Atualiza a interface para mostrar que está pensando
+            if interface:
+                interface.start_thinking()
+                pygame.event.pump()
+                
+            # Processa a resposta
+            resposta = agent.run(comando)
+            
+            # Atualiza a interface para mostrar que está respondendo
+            if interface:
+                interface.start_talking()
+                pygame.event.pump()
+                
+            print(f"\n🧠 Jarvis: {resposta}")
+            
+            # Adiciona um pequeno delay para permitir que a animação de fala seja vista
+            time.sleep(len(resposta) * 0.05)  # Tempo proporcional ao tamanho da resposta
+            
+            # Volta para o estado neutro
+            if interface:
+                interface.stop_talking()
+                pygame.event.pump()
+            
+        except KeyboardInterrupt:
+            print("\n👋 Encerrando o modo de voz...")
+            if interface:
+                interface.stop()
+            return
+        except Exception as e:
+            print(f"\n❌ Erro: {str(e)}")
+            if interface:
+                interface.stop_talking()
 
 # Configuração do agente
 tools = [
@@ -365,42 +633,67 @@ agent = initialize_agent(
     Você tem acesso a ferramentas para pesquisar na web e reproduzir músicas no YouTube.""")
 )
 
-# 🚀 Execução principal
-def modo_voz():
-    print("\n🎤 Modo de reconhecimento de voz ativado! Diga 'Jarvis' seguido do seu pedido de música.")
-    print("🛑 Pressione Ctrl+C para sair")
-    
-    try:
-        while True:
-            comando = processar_comando_voz()
-            if comando:
-                print(f"🎵 Reproduzindo: {comando}")
-                tocar_musica(comando)
-    except KeyboardInterrupt:
-        print("\n👋 Encerrando o modo de voz...")
-
 def modo_texto():
-    print("\n⌨️ Modo de texto ativado! Digite seus comandos:")
-    print("🛑 Pressione Ctrl+C para sair")
+    """Inicia o assistente no modo de comandos por texto."""
+    global interface
+    print("\n⌨️ Modo de Texto iniciado - digite seu comando ou 'sair' para encerrar.")
     
-    try:
-        while True:
-            comando = input("\nEu: ")
+    import pygame
+    while True:
+        if interface:
+            pygame.event.pump()
+        comando = input("\n🔤 Digite seu comando: ").strip().lower()
+        
+        if comando == "sair":
+            print("\n👋 Encerrando o modo de texto...")
+            if interface:
+                interface.stop()
+            return
+        
+        try:
+            # Atualiza a interface para mostrar que está pensando
+            if interface:
+                interface.start_thinking()
+                pygame.event.pump()
+                
+            # Processa a resposta
             resposta = agent.run(comando)
-            print(f"\n📢 Resposta do assistente: {resposta}")
-    except KeyboardInterrupt:
-        print("\n👋 Encerrando o modo de texto...")
+            
+            # Atualiza a interface para mostrar que está respondendo
+            if interface:
+                interface.start_talking()
+                pygame.event.pump()
+                
+            print(f"\n🧠 Jarvis: {resposta}")
+            
+            # Adiciona um pequeno delay para permitir que a animação de fala seja vista
+            time.sleep(len(resposta) * 0.05)  # Tempo proporcional ao tamanho da resposta
+            
+            # Volta para o estado neutro
+            if interface:
+                interface.stop_talking()
+                pygame.event.pump()
+                
+        except Exception as e:
+            print(f"\n❌ Erro: {e}")
+            if interface:
+                interface.stop_talking()
+
+# Variável global para a interface gráfica
+interface = None
 
 # Interface de linha de comando simples
 if __name__ == "__main__":
     print("\n🤖 JARVIS - Assistente Pessoal")
-    print("1 - Modo de voz (diga 'Jarvis' seguido do pedido de música)")
-    print("2 - Modo de texto (digite comandos)")
     
-    escolha = input("Escolha uma opção (1/2): ")
+    # Inicializa a interface gráfica
+    try:
+        interface = JarvisInterface()
+        interface.start()
+        print("✅ Interface gráfica iniciada.")
+    except Exception as e:
+        print(f"⚠️ Não foi possível iniciar a interface gráfica: {e}")
+        interface = None
     
-    if escolha == "1":
-        modo_voz()
-    else:
-        modo_texto()
-    print(f"\n📢 Resposta do assistente: {resposta}")
+    # Inicia o assistente no modo de voz
+    modo_voz()
